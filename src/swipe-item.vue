@@ -3,9 +3,19 @@
     <slot></slot>
   </div>
 </template>
-
-<script type="text/ecmascript-6">
-  export default {
+<style scoped>
+  .swipe-item {
+    height: 100%;
+    width: 33.33%;
+    position: absolute;
+    display: none;
+  }
+  .swipe-item.active {
+    display: block;
+  }
+</style>
+<script>
+  export default{
     name: 'mt-swipe-item',
 
     ready() {
@@ -19,5 +29,5 @@
     destroyed() {
       this.$dispatch('swipeItemDestroyed', this);
     }
-  };
+  }
 </script>

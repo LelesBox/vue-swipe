@@ -1,481 +1,303 @@
-<style>
-  .swipe {
-    overflow: hidden;
-    position: relative;
-  }
-
-  .swipe-items-wrap {
-    position: relative;
-    overflow: hidden;
-    height: 100%;
-  }
-
-  .swipe-items-wrap > div {
-    position: absolute;
-    transform: translateX(-100%);
+<template>
+  <div class="wrap">
+    <div class="container" @touchstart="touchStart" @touchmove="touchMove" @touchend="touchEnd" v-el:container>
+      <slot></slot>
+    </div>
+    <div class="indicatorContainer" v-show="showIndicators">
+      <div class="indicator" v-for="page in pages" :class="{ active: $index === index }"></div>
+    </div>
+  </div>
+</template>
+<style scoped>
+  .wrap {
     width: 100%;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .container {
     height: 100%;
-    display: none;
+    width: 300%;
+    position: relative;
+    left: -100%;
+    background: red;
   }
 
-  .swipe-items-wrap > div.active {
-    display: block;
-    transform: none;
-  }
-
-  .swipe-indicators {
+  .indicatorContainer {
     position: absolute;
+    opacity: .3;
     bottom: 10px;
     left: 50%;
     transform: translateX(-50%);
   }
 
-  .swipe-indicator {
+  .indicator {
+    border-radius: 50%;
     width: 8px;
     height: 8px;
-    display: inline-block;
-    border-radius: 100%;
-    background: #000;
-    opacity: 0.2;
+    float: left;
     margin: 0 3px;
+    background: #000000;
   }
 
-  .swipe-indicator.active {
-    background: #fff;
+  .indicator.active {
+    background: #ffffff;
   }
 </style>
-
-<template>
-  <div class="swipe">
-    <div class="swipe-items-wrap" v-el:wrap>
-      <slot></slot>
-    </div>
-    <div class="swipe-indicators" v-show="showIndicators">
-      <div class="swipe-indicator" v-for="page in pages" :class="{ active: $index === index }"></div>
-    </div>
-  </div>
-</template>
-
 <script type="text/ecmascript-6">
   import { once, addClass, removeClass } from 'wind-dom';
 
-  export default {
-    name: 'mt-swipe',
-
-    created() {
-      this.dragState = {};
-    },
-
-    data() {
-      return {
-        ready: false,
-        dragging: false,
-        userScrolling: false,
-        animating: false,
-        index: 0,
-        pages: [],
-        timer: null,
-        reInitTimer: null,
-        noDrag: false
-      };
-    },
-
+  export default{
     props: {
       speed: {
         type: Number,
         default: 300
       },
-
       auto: {
         type: Number,
         default: 3000
       },
-
-      continuous: {
-        type: Boolean,
-        default: true
-      },
-
       showIndicators: {
         type: Boolean,
         default: true
       },
-
-      noDragWhenSingle: {
-        type: Boolean,
-        default: true
-      },
-
       prevent: {
         type: Boolean,
         default: false
       }
     },
-
     events: {
-      swipeItemCreated() {
-        if (!this.ready) return;
-
-        clearTimeout(this.reInitTimer);
-        this.reInitTimer = setTimeout(() => {
-          this.reInitPages();
-        }, 100);
+      // 当子组件个数改变时重新init
+      swipeItemCreated(){
+        if( this.childrenCount !== this.$children.length ){
+          this.init()
+        }
       },
-
       swipeItemDestroyed(){
-        if (!this.ready) return;
-
-        clearTimeout(this.reInitTimer);
-        this.reInitTimer = setTimeout(() => {
-          this.reInitPages();
-        }, 100);
+        if( this.childrenCount !== this.$children.length ){
+          this.init()
+        }
       }
     },
-
+    data(){
+      return {
+        index: 0,
+        pages: [],
+        leftIndex: null,
+        current: null,
+        rightIndex: null,
+        clientWidth: 0,
+        container: null,
+        timer: null,
+        prefix: 0,
+        childrenCount:0,
+        dragState: {
+          startClientX: 0,
+          startClietnY: 0,
+          endOffsetX: 0,
+          endOffsetY: 0,
+          startTime: 0,
+          onDrag: false,
+          onAnimate: false,
+          verticalScrolling: false
+        },
+        // 当swipeItem只有两个时，需要用到这两个临时元素，使用两个字段保存是为了防止过多的使用cloneNode方法，看setPagePostion方法
+        tmpEl1:null,
+        tmpEl2:null
+      }
+    },
     methods: {
-      translate(element, offset, speed, callback) {
-        if (speed) {
-          this.animating = true;
-          element.style.webkitTransition = '-webkit-transform ' + speed + 'ms ease-in-out';
-          setTimeout(() => element.style.webkitTransform = `translate3d(${offset}px, 0, 0)`, 50);
-
-          var called = false;
-
-          var transitionEndCallback = () => {
-            if (called) return;
-            called = true;
-            this.animating = false;
-            element.style.webkitTransition = '';
-            element.style.webkitTransform = '';
-            if (callback) {
-              callback.apply(this, arguments);
-            }
-          };
-
-          once(element, 'webkitTransitionEnd', transitionEndCallback);
-          setTimeout(transitionEndCallback, speed + 100); // webkitTransitionEnd maybe not fire on lower version android.
+      init(){
+        this.childrenCount = this.$children.length
+        this.container = this.$els.container
+        // 在外部，当容器的子组件动态增加删除时，vue为了复用并不会真的把dom删除而是隐藏它
+        // 这时候我们必须手动把该容器下的所有div元素的display全部初始化为‘none’
+        Array.prototype.slice.call(this.container.children,0).map( item => {
+          item.style.display = 'none'
+        })
+        //不能使用 this.pages = this.container.children，因为之后我们会对container做insert操作，会导致this.pages变化，
+        //而这里我们并不希望this.pages再出现动态的增加或者减少
+        this.pages = this.$children.map( item => {
+          return item.$el
+        })
+        if ( this.pages.length === 0 )return
+        else if ( this.pages.length === 1 ) {
+          this.current = this.pages[0]
+          this.current.style.display = 'block'
+          this.current.style.transform = this.current.style.webkitTransform = ''
+          this.container.style.left = '0'
+          this.showIndicators = false
+          clearInterval( this.timer )
         } else {
-          element.style.webkitTransition = '';
-          element.style.webkitTransform = `translate3d(${offset}px, 0, 0)`;
+          this.container.style.left = '-100%'
+          this.showIndicators = true
+          if( this.pages.length === 2 ) {
+            // 当只有两个子组件时，我们需要额外补充两个克隆组件才能填充长度为300%的容器，在setPagePosition会做处理
+            this.tmpEl1 = this.pages[0].cloneNode( true )
+            this.tmpEl2 = this.pages[1].cloneNode( true )
+            this.container.insertBefore( this.tmpEl1 , this.container.firstChild )
+            this.container.insertBefore( this.tmpEl2 , this.container.firstChild )
+          }
+          this.clientWidth = this.$el.clientWidth
+          this.setPagePosition( 0 )
+          clearInterval( this.timer )
+          this.autoScroll()
         }
       },
-
-      reInitPages() {
-        var children = this.$children;
-        this.noDrag = children.length === 1 && this.noDragWhenSingle;
-
-        var pages = [];
-        this.index = 0;
-
-        children.forEach(function(child, index) {
-          pages.push(child.$el);
-
-          removeClass(child.$el, 'active');
-
-          if (index === 0) {
-            addClass(child.$el, 'active');
-          }
-        });
-
-        this.pages = pages;
-      },
-
-      doAnimate(towards, options) {
-        if (this.$children.length === 0) return;
-        if (!options && this.$children.length < 2) return;
-
-        var prevPage, nextPage, currentPage, pageWidth, offsetLeft;
-        var speed = this.speed || 300;
-        var index = this.index;
-        var pages = this.pages;
-        var pageCount = pages.length;
-
-        if (!options) {
-          pageWidth = this.$el.clientWidth;
-          currentPage = pages[index];
-          prevPage = pages[index - 1];
-          nextPage = pages[index + 1];
-          if (this.continuous && pages.length > 1) {
-            if (!prevPage) {
-              prevPage = pages[pages.length - 1];
-            }
-            if (!nextPage) {
-              nextPage = pages[0];
-            }
-          }
-          if (prevPage) {
-            prevPage.style.display = 'block';
-            this.translate(prevPage, -pageWidth);
-          }
-          if (nextPage) {
-            nextPage.style.display = 'block';
-            this.translate(nextPage, pageWidth);
-          }
+      setPagePosition(index, direction){
+        if ( direction === 'showPrev' ) {
+          this.right.style.display = 'none'
+        } else if ( direction === 'showNext' ) {
+          this.left.style.display = 'none'
+        }
+        this.index = index
+        if ( index === 0 ) {
+          this.leftIndex = this.pages.length - 1
         } else {
-          prevPage = options.prevPage;
-          currentPage = options.currentPage;
-          nextPage = options.nextPage;
-          pageWidth = options.pageWidth;
-          offsetLeft = options.offsetLeft;
+          this.leftIndex = index - 1
         }
-
-        var newIndex;
-
-        var oldPage = this.$children[index].$el;
-
-        if (towards === 'prev') {
-          if (index > 0) {
-            newIndex = index - 1;
-          }
-          if (this.continuous && index === 0) {
-            newIndex = pageCount - 1;
-          }
-        } else if (towards === 'next') {
-          if (index < pageCount - 1) {
-            newIndex = index + 1;
-          }
-          if (this.continuous && index === pageCount - 1) {
-            newIndex = 0;
+        if ( index === this.pages.length - 1 ) {
+          this.rightIndex = 0
+        } else {
+          this.rightIndex = index + 1
+        }
+        this.left = this.pages[ this.leftIndex ]
+        this.current = this.pages[ this.index ]
+        this.right = this.pages[ this.rightIndex ]
+        // 处理当只有2个切换项时的问题
+        if( this.pages.length === 2 ) {
+          this.tmpEl2.style.display = 'none'
+          this.tmpEl1.style.display = 'none'
+          if( index === 0 ){
+            this.left = this.tmpEl2
+          }else if( index === 1 ){
+            this.left = this.tmpEl1
           }
         }
+        this.left.style.transform = 'translateX(0)'
+        this.left.style.display = 'block'
+        this.current.style.transform = 'translateX(100%)'
+        this.current.style.display = 'block'
+        this.right.style.transform = 'translateX(200%)'
+        this.right.style.display = 'block'
+      },
+      touchStart(e){
+        if( this.pages.length < 2 ) return
 
-        var callback = () => {
-          if (newIndex !== undefined) {
-            var newPage = this.$children[newIndex].$el;
-            removeClass(oldPage, 'active');
-            addClass(newPage, 'active');
+        if ( this.prevent ) {
+          e.preventDefault();
+        }
+        clearInterval(this.timer)
+        /*
+         * 时间放在这里是有讲究的,如果放在return语句的下面,就会遇到,touchstart时this.dragState.onAnimate为true,没有重新获得新时间
+         * 而endtouch时this.dragState.onAnimate刚好为false,这时候去比对时间差,这样会导致这时间差变大
+         * */
+        this.dragState.startTime = new Date()
+        if ( this.dragState.onAnimate )return
+        var touches = e.touches[ 0 ]
+        this.dragState.startClientX = touches.clientX
+        this.dragState.startClientY = touches.clientY
+      },
+      touchMove(e){
+        if( this.pages.length < 2 ) return
+        /*
+         * 0.当上下移动距离小于8左右移动距离小于10时,我们不为所动
+         * 1.当手指上下移动距离超过10px,则此次的所有操作都不会触发左右滚动 (需要额外全局参数,this.verticalScrolling)
+         * 2.当收拾左右移动距离超过10px,则此次操作只会导致左右滚动而不会出现上下滚动,由于左右移动是超过10px时才会触发,所以真实
+         * 移动距离得处理这10px的误差,当左移动时,减去10px,当右移动时加上10px
+         * */
+        if ( this.dragState.onAnimate ) {
+          e.preventDefault()
+          return
+        }
+        var touches = e.touches[ 0 ]
+        this.dragState.endOffsetX = touches.clientX - this.dragState.startClientX
+        var threshold = 5
 
-            this.index = newIndex;
-          }
-
-          if (prevPage) {
-            prevPage.style.display = '';
-          }
-
-          if (nextPage) {
-            nextPage.style.display = '';
-          }
-        };
-
-        setTimeout(() => {
-          if (towards === 'next') {
-            this.translate(currentPage, -pageWidth, speed, callback);
-            if (nextPage) {
-              this.translate(nextPage, 0, speed);
-            }
-          } else if (towards === 'prev') {
-            this.translate(currentPage, pageWidth, speed, callback);
-            if (prevPage) {
-              this.translate(prevPage, 0, speed);
+        if ( this.dragState.onDrag ) {
+//          防止默认行为,阻止它操作上下移动
+          e.preventDefault()
+//          阻止冒泡,比如点击,拖动等事件不会传递到它上层元素
+          e.cancelBubble = true
+          this.translate(this.dragState.endOffsetX - this.prefix)
+        } else if ( Math.abs(this.dragState.endOffsetX) > threshold && !this.dragState.verticalScrolling ) {
+          e.preventDefault()
+          this.dragState.onDrag = true
+          this.dragState.verticalScrolling = false
+          this.prefix = this.dragState.endOffsetX > 0 ? threshold : -threshold
+        }
+//        这里this.dragState.verticalScrolling 存在的意义在于,当此次滚动中出现上下滚动,那直到手指离开前,都不会触发左右滚动
+        else if ( Math.abs(touches.clientY - this.dragState.startClientY) > threshold && !this.dragState.onDrag || this.dragState.verticalScrolling ) {
+          this.dragState.onDrag = false
+          this.dragState.verticalScrolling = true
+        }
+      },
+      touchEnd(){
+        if ( this.dragState.onAnimate || this.pages.length < 2 ) return
+        this.dragState.verticalScrolling = false
+        /*
+         * 这么做是为了当快速切换的时候,this.dragState.startTime 还没来记得触发touchstart事件初始化就开始触发touchend,导致
+         * 时间参数还是上一次的参数,此时再去相减的话就会造成时间差变长
+         * */
+        var interval = new Date() - this.dragState.startTime
+        if ( this.dragState.endOffsetX !== 0 && this.dragState.onDrag ) {
+          this.dragState.onAnimate = true
+          this.dragState.onDrag = false
+          if ( Math.abs(this.dragState.endOffsetX ) > this.clientWidth / 2 || (Math.abs( this.dragState.endOffsetX ) > 20 && interval < 500 ) ) {
+            if ( this.dragState.endOffsetX > 0 ) {
+              this.translate(this.clientWidth, true, ()=> {
+                this.setPagePosition(this.leftIndex, 'showPrev')
+              })
+            } else {
+              this.translate(-this.clientWidth, true, ()=> {
+                this.setPagePosition(this.rightIndex, 'showNext')
+              })
             }
           } else {
-            this.translate(currentPage, 0, speed, callback);
-            if (typeof offsetLeft !== 'undefined') {
-              if (prevPage && offsetLeft > 0) {
-                this.translate(prevPage, pageWidth * -1, speed);
-              }
-              if (nextPage && offsetLeft < 0) {
-                this.translate(nextPage, pageWidth, speed);
-              }
-            } else {
-              if (prevPage) {
-                this.translate(prevPage, pageWidth * -1, speed);
-              }
-              if (nextPage) {
-                this.translate(nextPage, pageWidth, speed);
-              }
-            }
+            this.translate(0, true)
           }
-        }, 10);
-      },
-
-      next() {
-        this.doAnimate('next');
-      },
-
-      prev() {
-        this.doAnimate('prev');
-      },
-
-      doOnTouchStart: function(event) {
-        if (this.noDrag) return;
-
-        var element = this.$el;
-        var dragState = this.dragState;
-        var touch = event.touches[0];
-
-        dragState.startTime = new Date();
-        dragState.startLeft = touch.pageX;
-        dragState.startTop = touch.pageY;
-        dragState.startTopAbsolute = touch.clientY;
-
-        dragState.pageWidth = element.offsetWidth;
-        dragState.pageHeight = element.offsetHeight;
-
-        var prevPage = this.$children[this.index - 1];
-        var dragPage = this.$children[this.index];
-        var nextPage = this.$children[this.index + 1];
-
-        if (this.continuous && this.pages.length > 1) {
-          if (!prevPage) {
-            prevPage = this.$children[this.$children.length - 1];
-          }
-          if (!nextPage) {
-            nextPage = this.$children[0];
-          }
-        }
-
-        dragState.prevPage = prevPage ? prevPage.$el : null;
-        dragState.dragPage = dragPage ? dragPage.$el : null;
-        dragState.nextPage = nextPage ? nextPage.$el : null;
-
-        if (dragState.prevPage) {
-          dragState.prevPage.style.display = 'block';
-        }
-
-        if (dragState.nextPage) {
-          dragState.nextPage.style.display = 'block';
-        }
-      },
-
-      doOnTouchMove: function(event) {
-        if (this.noDrag) return;
-
-        var dragState = this.dragState;
-        var touch = event.touches[0];
-
-        dragState.currentLeft = touch.pageX;
-        dragState.currentTop = touch.pageY;
-        dragState.currentTopAbsolute = touch.clientY;
-
-        var offsetLeft = dragState.currentLeft - dragState.startLeft;
-        var offsetTop = dragState.currentTopAbsolute - dragState.startTopAbsolute;
-
-        var distanceX = Math.abs(offsetLeft);
-        var distanceY = Math.abs(offsetTop);
-        if (distanceX < 5 || (distanceX >= 5 && distanceY >= 1.73 * distanceX)) {
-          this.userScrolling = true;
-          return;
+//        等待理论上的动画时间结束后才开始
+          setTimeout(()=> {
+            this.autoScroll()
+          }, this.speed)
         } else {
-          this.userScrolling = false;
-          event.preventDefault();
+          this.autoScroll()
         }
-        offsetLeft = Math.min(Math.max(-dragState.pageWidth + 1, offsetLeft), dragState.pageWidth - 1);
-
-        var towards = offsetLeft < 0 ? 'next' : 'prev';
-
-        if (dragState.prevPage && towards === 'prev') {
-          this.translate(dragState.prevPage, offsetLeft - dragState.pageWidth);
-        }
-        this.translate(dragState.dragPage, offsetLeft);
-        if (dragState.nextPage && towards === 'next') {
-          this.translate(dragState.nextPage, offsetLeft + dragState.pageWidth);
+        this.dragState.endOffsetX = 0
+      },
+      translate(offset, auto, callback){
+        var element = this.container
+        if ( auto ) {
+          element.style.webkitTransition = 'transform ' + this.speed + 'ms ease'
+          setTimeout(() => element.style.webkitTransform = `translate3d(${offset}px, 0, 0)`, 50)
+          var called = false
+          var transitionEndCallback = () => {
+            if ( called ) return
+            called = true
+            element.style.webkitTransition = ''
+            element.style.webkitTransform = ''
+            if ( callback ) {
+              callback.apply(this, arguments)
+            }
+            this.dragState.onAnimate = false
+          }
+          once(element, 'webkitTransitionEnd', transitionEndCallback)
+          setTimeout(transitionEndCallback, this.speed + 100) // webkitTransitionEnd maybe not fire on lower version android.
+        } else {
+          element.style.webkitTransition = ''
+          element.style.transform = `translate3d(${offset}px,0,0)`
         }
       },
-
-      doOnTouchEnd: function() {
-        if (this.noDrag) return;
-
-        var dragState = this.dragState;
-
-        var dragDuration = new Date() - dragState.startTime;
-        var towards = null;
-
-        var offsetLeft = dragState.currentLeft - dragState.startLeft;
-        var offsetTop = dragState.currentTop - dragState.startTop;
-        var pageWidth = dragState.pageWidth;
-        var index = this.index;
-        var pageCount = this.pages.length;
-
-        if (dragDuration < 300) {
-          let fireTap = Math.abs(offsetLeft) < 5 && Math.abs(offsetTop) < 5;
-          if (isNaN(offsetLeft) || isNaN(offsetTop)) {
-            fireTap = true;
-          }
-          if (fireTap) {
-            this.$children[this.index].$emit('tap');
-          }
+      autoScroll(){
+        clearInterval(this.timer)
+        if ( this.auto > 0 && this.pages.length > 1 ) {
+          this.timer = setInterval(()=> {
+            this.translate(-this.clientWidth, true, ()=> {
+              this.setPagePosition(this.rightIndex, 'showNext')
+            })
+          }, this.auto)
         }
-
-        if (dragDuration < 300 && dragState.currentLeft === undefined) return;
-
-        if (dragDuration < 300 || Math.abs(offsetLeft) > pageWidth / 2) {
-          towards = offsetLeft < 0 ? 'next' : 'prev';
-        }
-
-        if (!this.continuous) {
-          if ((index === 0 && towards === 'prev') || (index === pageCount - 1 && towards === 'next')) {
-            towards = null;
-          }
-        }
-
-        if (this.$children.length < 2) {
-          towards = null;
-        }
-
-        this.doAnimate(towards, {
-          offsetLeft: offsetLeft,
-          pageWidth: dragState.pageWidth,
-          prevPage: dragState.prevPage,
-          currentPage: dragState.dragPage,
-          nextPage: dragState.nextPage
-        });
-
-        this.dragState = {};
       }
-    },
-
-    destroyed() {
-      if (this.timer) {
-        clearInterval(this.timer);
-        this.timer = null;
-      }
-      if (this.reInitTimer) {
-        clearTimeout(this.reInitTimer);
-        this.reInitTimer = null;
-      }
-    },
-
-    ready() {
-      this.ready = true;
-
-      if (this.auto > 0) {
-        this.timer = setInterval(() => {
-          if (!this.dragging && !this.animating) {
-            this.next();
-          }
-        }, this.auto);
-      }
-
-      this.reInitPages();
-
-      var element = this.$el;
-
-      element.addEventListener('touchstart', (event) => {
-        if (this.prevent) {
-          event.preventDefault();
-        }
-        if (this.animating) return;
-        this.dragging = true;
-        this.userScrolling = false;
-        this.doOnTouchStart(event);
-      });
-
-      element.addEventListener('touchmove', (event) => {
-        if (!this.dragging) return;
-        this.doOnTouchMove(event);
-      });
-
-      element.addEventListener('touchend', (event) => {
-        if (this.userScrolling) {
-          this.dragging = false;
-          this.dragState = {};
-          return;
-        }
-        if (!this.dragging) return;
-        this.doOnTouchEnd(event);
-        this.dragging = false;
-      });
     }
-  };
+  }
 </script>
